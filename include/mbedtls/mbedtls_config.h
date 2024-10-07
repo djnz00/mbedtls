@@ -558,7 +558,7 @@
  *
  * Uncomment to use your own recycling buffer allocator.
  */
-//#define MBEDTLS_BIO_BUF
+#define MBEDTLS_BIO_BUF
 
 /**
  * \def MBEDTLS_AES_ROM_TABLES
