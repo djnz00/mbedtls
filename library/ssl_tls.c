@@ -1392,7 +1392,11 @@ int mbedtls_ssl_setup(mbedtls_ssl_context *ssl,
 #if defined(MBEDTLS_SSL_VARIABLE_BUFFER_LENGTH)
     ssl->in_buf_len = in_buf_len;
 #endif
+#if defined(MBEDTLS_BIO_BUF)
+    ssl->in_buf = ssl->f_in_buf_alloc(ssl->p_bio, in_buf_len);
+#else
     ssl->in_buf = mbedtls_calloc(1, in_buf_len);
+#endif /* MBEDTLS_BIO_BUF */
     if (ssl->in_buf == NULL) {
         MBEDTLS_SSL_DEBUG_MSG(1, ("alloc(%" MBEDTLS_PRINTF_SIZET " bytes) failed", in_buf_len));
         ret = MBEDTLS_ERR_SSL_ALLOC_FAILED;
@@ -1402,7 +1406,11 @@ int mbedtls_ssl_setup(mbedtls_ssl_context *ssl,
 #if defined(MBEDTLS_SSL_VARIABLE_BUFFER_LENGTH)
     ssl->out_buf_len = out_buf_len;
 #endif
+#if defined(MBEDTLS_BIO_BUF)
+    ssl->out_buf = ssl->f_out_buf_alloc(ssl->p_bio, out_buf_len);
+#else
     ssl->out_buf = mbedtls_calloc(1, out_buf_len);
+#endif /* MBEDTLS_BIO_BUF */
     if (ssl->out_buf == NULL) {
         MBEDTLS_SSL_DEBUG_MSG(1, ("alloc(%" MBEDTLS_PRINTF_SIZET " bytes) failed", out_buf_len));
         ret = MBEDTLS_ERR_SSL_ALLOC_FAILED;
@@ -1422,8 +1430,13 @@ int mbedtls_ssl_setup(mbedtls_ssl_context *ssl,
     return 0;
 
 error:
+#if defined(MBEDTLS_BIO_BUF)
+    ssl->f_buf_free(ssl->p_bio, ssl->in_buf);
+    ssl->f_buf_free(ssl->p_bio, ssl->out_buf);
+#else
     mbedtls_free(ssl->in_buf);
     mbedtls_free(ssl->out_buf);
+#endif /* MBEDTLS_BIO_BUF */
 
     ssl->conf = NULL;
 
@@ -1670,17 +1683,91 @@ void mbedtls_ssl_conf_dbg(mbedtls_ssl_config *conf,
     conf->p_dbg      = p_dbg;
 }
 
+#if defined(MBEDTLS_BIO_BUF)
+/*
+ * These forwarding stub functions are used for programs
+ * registering callbacks with the regular \c mbedtls_ssl_set_bio()
+ * function - the extra \c recycle parameter is stripped before
+ * the callback is called with the original context
+ */
+static int mbedtls_ssl_buf_send(void *ctx, const unsigned char *buf,
+                                size_t len, unsigned char **recycle)
+{
+    (void)recycle; /* suppress unused warning */
+    mbedtls_ssl_context *ssl = (mbedtls_ssl_context *)ctx;
+    return ssl->f_send(ssl->p_bio, buf, len);
+}
+static int mbedtls_ssl_buf_recv(void *ctx, unsigned char *buf, size_t len,
+                                unsigned char **recycle)
+{
+    (void)recycle; /* suppress unused warning */
+    mbedtls_ssl_context *ssl = (mbedtls_ssl_context *)ctx;
+    return ssl->f_recv(ssl->p_bio, buf, len);
+}
+static int mbedtls_ssl_buf_recv_timeout(void *ctx, unsigned char *buf,
+                                        size_t len, uint32_t timeout,
+                                        unsigned char **recycle)
+{
+    (void)recycle; /* suppress unused warning */
+    mbedtls_ssl_context *ssl = (mbedtls_ssl_context *)ctx;
+    return ssl->f_recv_timeout(ssl->p_bio, buf, len, timeout);
+}
+static void *mbedtls_ssl_buf_alloc(void *ctx, size_t size)
+{
+    (void)ctx; /* suppress unused warning */
+    return mbedtls_calloc(1, size);
+}
+static void mbedtls_ssl_buf_free(void *ctx, void *buf)
+{
+    (void)ctx; /* suppress unused warning */
+    mbedtls_free(buf);
+}
+#endif /* MBEDTLS_BIO_BUF */
+
 void mbedtls_ssl_set_bio(mbedtls_ssl_context *ssl,
                          void *p_bio,
                          mbedtls_ssl_send_t *f_send,
                          mbedtls_ssl_recv_t *f_recv,
                          mbedtls_ssl_recv_timeout_t *f_recv_timeout)
 {
-    ssl->p_bio          = p_bio;
-    ssl->f_send         = f_send;
-    ssl->f_recv         = f_recv;
-    ssl->f_recv_timeout = f_recv_timeout;
+    ssl->p_bio           = p_bio;
+    ssl->f_send          = f_send;
+    ssl->f_recv          = f_recv;
+    ssl->f_recv_timeout  = f_recv_timeout;
+#if defined(MBEDTLS_BIO_BUF)
+    ssl->p_buf_bio           = ssl;
+    ssl->f_buf_send          = &mbedtls_ssl_buf_send;
+    ssl->f_buf_recv          = &mbedtls_ssl_buf_recv;
+    ssl->f_buf_recv_timeout  = &mbedtls_ssl_buf_recv_timeout;
+    ssl->f_in_buf_alloc      = &mbedtls_ssl_buf_alloc;
+    ssl->f_out_buf_alloc     = &mbedtls_ssl_buf_alloc;
+    ssl->f_buf_free          = &mbedtls_ssl_buf_free;
+#endif /* MBEDTLS_BIO_BUF */
 }
+
+#if defined(MBEDTLS_BIO_BUF)
+void mbedtls_ssl_set_bio_buf(mbedtls_ssl_context *ssl,
+                             void *p_buf_bio,
+                             mbedtls_ssl_buf_send_t *f_buf_send,
+                             mbedtls_ssl_buf_recv_t *f_buf_recv,
+                             mbedtls_ssl_buf_recv_timeout_t *f_buf_recv_timeout,
+                             mbedtls_ssl_buf_alloc_t *f_in_buf_alloc,
+                             mbedtls_ssl_buf_alloc_t *f_out_buf_alloc,
+                             mbedtls_ssl_buf_free_t *f_buf_free)
+{
+    ssl->p_bio               = NULL;
+    ssl->f_send              = NULL;
+    ssl->f_recv              = NULL;
+    ssl->f_recv_timeout      = NULL;
+    ssl->p_buf_bio           = p_buf_bio;
+    ssl->f_buf_send          = f_buf_send;
+    ssl->f_buf_recv          = f_buf_recv;
+    ssl->f_buf_recv_timeout  = f_buf_recv_timeout;
+    ssl->f_in_buf_alloc      = f_in_buf_alloc;
+    ssl->f_out_buf_alloc     = f_out_buf_alloc;
+    ssl->f_buf_free          = f_buf_free;
+}
+#endif /* MBEDTLS_BIO_BUF */
 
 #if defined(MBEDTLS_SSL_PROTO_DTLS)
 void mbedtls_ssl_set_mtu(mbedtls_ssl_context *ssl, uint16_t mtu)
@@ -5521,6 +5608,9 @@ void mbedtls_ssl_free(mbedtls_ssl_context *ssl)
     MBEDTLS_SSL_DEBUG_MSG(2, ("=> free"));
 
     if (ssl->out_buf != NULL) {
+#if defined(MBEDTLS_BIO_BUF)
+	ssl->f_buf_free(ssl->p_bio, ssl->out_buf);
+#else
 #if defined(MBEDTLS_SSL_VARIABLE_BUFFER_LENGTH)
         size_t out_buf_len = ssl->out_buf_len;
 #else
@@ -5528,10 +5618,14 @@ void mbedtls_ssl_free(mbedtls_ssl_context *ssl)
 #endif
 
         mbedtls_zeroize_and_free(ssl->out_buf, out_buf_len);
+#endif /* MBEDTLS_BIO_BUF */
         ssl->out_buf = NULL;
     }
 
     if (ssl->in_buf != NULL) {
+#if defined(MBEDTLS_BIO_BUF)
+	ssl->f_buf_free(ssl->p_bio, ssl->in_buf);
+#else
 #if defined(MBEDTLS_SSL_VARIABLE_BUFFER_LENGTH)
         size_t in_buf_len = ssl->in_buf_len;
 #else
@@ -5539,6 +5633,7 @@ void mbedtls_ssl_free(mbedtls_ssl_context *ssl)
 #endif
 
         mbedtls_zeroize_and_free(ssl->in_buf, in_buf_len);
+#endif /* MBEDTLS_BIO_BUF */
         ssl->in_buf = NULL;
     }
 

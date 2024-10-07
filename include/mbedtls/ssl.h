@@ -820,6 +820,103 @@ typedef int mbedtls_ssl_recv_timeout_t(void *ctx,
                                        unsigned char *buf,
                                        size_t len,
                                        uint32_t timeout);
+
+#if defined(MBEDTLS_BIO_BUF)
+/**
+ * \brief          Callback type: allocate buffer for network send/receive.
+ *
+ * \param ctx      Context for the callback
+ * \param size     Size of the buffer to allocate
+ *
+ * \return         Pointer to allocated buffer
+ */
+typedef void *mbedtls_ssl_buf_alloc_t(void *ctx, size_t size);
+
+/**
+ * \brief          Callback type: free buffer for network send/receive.
+ *
+ * \param ctx      Context for the callback
+ * \param buf      Pointer to buffer to free
+ */
+typedef void mbedtls_ssl_buf_free_t(void *ctx, void *buf);
+
+/**
+ * \brief          Callback type: send data on the network.
+ *
+ * \note           That callback may be either blocking or non-blocking.
+ *
+ * \param ctx      Context for the send callback (typically a file descriptor)
+ * \param buf      Buffer holding the data to send
+ * \param len      Length of the data to send
+ * \param recycle  Pointer to optionally recycle the send buffer
+ *
+ * \return         The callback must return the number of bytes sent if any,
+ *                 or a non-zero error code.
+ *                 If performing non-blocking I/O, \c MBEDTLS_ERR_SSL_WANT_WRITE
+ *                 must be returned when the operation would block.
+ *
+ * \note           The callback is allowed to send fewer bytes than requested.
+ *                 It must always return the number of bytes actually sent.
+ */
+typedef int mbedtls_ssl_buf_send_t(void *ctx,
+                                   const unsigned char *buf,
+                                   size_t len, unsigned char **recycle);
+
+/**
+ * \brief          Callback type: receive data from the network.
+ *
+ * \note           That callback may be either blocking or non-blocking.
+ *
+ * \param ctx      Context for the receive callback (typically a file
+ *                 descriptor)
+ * \param buf      Buffer to write the received data to
+ * \param len      Length of the receive buffer
+ * \param recycle  Pointer to optionally recycle the receive buffer
+ *
+ * \returns        If data has been received, the positive number of bytes received.
+ * \returns        \c 0 if the connection has been closed.
+ * \returns        If performing non-blocking I/O, \c MBEDTLS_ERR_SSL_WANT_READ
+ *                 must be returned when the operation would block.
+ * \returns        Another negative error code on other kinds of failures.
+ *
+ * \note           The callback may receive fewer bytes than the length of the
+ *                 buffer. It must always return the number of bytes actually
+ *                 received and written to the buffer.
+ */
+typedef int mbedtls_ssl_buf_recv_t(void *ctx,
+                                   unsigned char *buf,
+                                   size_t len, unsigned char **recycle);
+
+/**
+ * \brief          Callback type: receive data from the network, with timeout
+ *
+ * \note           That callback must block until data is received, or the
+ *                 timeout delay expires, or the operation is interrupted by a
+ *                 signal.
+ *
+ * \param ctx      Context for the receive callback (typically a file descriptor)
+ * \param buf      Buffer to write the received data to
+ * \param len      Length of the receive buffer
+ * \param timeout  Maximum number of milliseconds to wait for data
+ *                 0 means no timeout (potentially waiting forever)
+ * \param recycle  Pointer to optionally recycle the receive buffer
+ *
+ * \return         The callback must return the number of bytes received,
+ *                 or a non-zero error code:
+ *                 \c MBEDTLS_ERR_SSL_TIMEOUT if the operation timed out,
+ *                 \c MBEDTLS_ERR_SSL_WANT_READ if interrupted by a signal.
+ *
+ * \note           The callback may receive fewer bytes than the length of the
+ *                 buffer. It must always return the number of bytes actually
+ *                 received and written to the buffer.
+ */
+typedef int mbedtls_ssl_buf_recv_timeout_t(void *ctx,
+                                           unsigned char *buf,
+                                           size_t len,
+                                           uint32_t timeout,
+                                           unsigned char **recycle);
+#endif /* MBEDTLS_BIO_BUF */
+
 /**
  * \brief          Callback type: set a pair of timers/delays to watch
  *
@@ -1739,6 +1836,20 @@ struct mbedtls_ssl_context {
 
     void *MBEDTLS_PRIVATE(p_bio);                /*!< context for I/O operations   */
 
+#if defined(MBEDTLS_BIO_BUF)
+    mbedtls_ssl_buf_alloc_t *MBEDTLS_PRIVATE(f_in_buf_alloc);
+    /*!< Callback to allocate network receive buffer */
+    mbedtls_ssl_buf_alloc_t *MBEDTLS_PRIVATE(f_out_buf_alloc);
+    /*!< Callback to allocate network send buffer */
+    mbedtls_ssl_buf_free_t *MBEDTLS_PRIVATE(f_buf_free); /*!< Callback to free network buffer */
+    mbedtls_ssl_buf_send_t *MBEDTLS_PRIVATE(f_buf_send); /*!< Callback for network buffer send */
+    mbedtls_ssl_buf_recv_t *MBEDTLS_PRIVATE(f_buf_recv); /*!< Callback for network buffer receive */
+    mbedtls_ssl_buf_recv_timeout_t *MBEDTLS_PRIVATE(f_buf_recv_timeout);
+    /*!< Callback for network buffer receive with timeout */
+
+    void *MBEDTLS_PRIVATE(p_buf_bio);                /*!< context for buffer I/O operations   */
+#endif /* MBEDTLS_BIO_BUF */
+
     /*
      * Session layer
      */
@@ -2244,6 +2355,47 @@ void mbedtls_ssl_set_bio(mbedtls_ssl_context *ssl,
                          mbedtls_ssl_send_t *f_send,
                          mbedtls_ssl_recv_t *f_recv,
                          mbedtls_ssl_recv_timeout_t *f_recv_timeout);
+
+#if defined(MBEDTLS_BIO_BUF)
+/**
+ * \brief          Set the underlying BIO buffer callbacks for write, read and
+ *                 read-with-timeout.
+ *
+ * \param ssl                SSL context
+ * \param p_buf_bio          parameter (context) shared by BIO buffer callbacks
+ * \param f_buf_send         write callback
+ * \param f_buf_recv         read callback
+ * \param f_buf_recv_timeout blocking read callback with timeout
+ * \param f_alloc_in_buf     allocate receive buffer
+ * \param f_alloc_out_buf    allocate send buffer
+ * \param f_buf_free         free buffer
+ *
+ * \note           One of f_buf_recv or f_buf_recv_timeout can be NULL,
+ *                 in which case the other is used. If both are non-NULL,
+ *                 f_buf_recv_timeout is used and f_buf_recv is ignored
+ *                 (as if it were NULL).
+ *
+ * \note           The two most common use cases are:
+ *                 - non-blocking I/O, f_buf_recv != NULL, f_buf_recv_timeout == NULL
+ *                 - blocking I/O, f_buf_recv == NULL, f_buf_recv_timeout != NULL
+ *
+ * \note           For DTLS, you need to provide either a non-NULL
+ *                 f_buf_recv_timeout callback, or a f_buf_recv that doesn't block.
+ *
+ * \note           See the documentations of \c mbedtls_ssl_buf_send_t,
+ *                 \c mbedtls_ssl_buf_recv_t, \c mbedtls_ssl_buf_recv_timeout_t
+ *                 \c mbedtls_buf_alloc_t and \c mbedtls_buf_free_t
+ *                 for the conventions those callbacks must follow.
+ */
+void mbedtls_ssl_set_bio_buf(mbedtls_ssl_context *ssl,
+                             void *p_buf_bio,
+                             mbedtls_ssl_buf_send_t *f_buf_send,
+                             mbedtls_ssl_buf_recv_t *f_buf_recv,
+                             mbedtls_ssl_buf_recv_timeout_t *f_buf_recv_timeout,
+                             mbedtls_ssl_buf_alloc_t *f_in_buf_alloc,
+                             mbedtls_ssl_buf_alloc_t *f_out_buf_alloc,
+                             mbedtls_ssl_buf_free_t *f_buf_free);
+#endif /* MBEDTLS_BIO_BUF */
 
 #if defined(MBEDTLS_SSL_PROTO_DTLS)
 

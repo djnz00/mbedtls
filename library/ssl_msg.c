@@ -2151,15 +2151,23 @@ int mbedtls_ssl_fetch_input(mbedtls_ssl_context *ssl, size_t nb_want)
 #else
     size_t in_buf_len = MBEDTLS_SSL_IN_BUFFER_LEN;
 #endif
+    size_t in_hdr_offset = (size_t)(ssl->in_hdr - ssl->in_buf);
 
     MBEDTLS_SSL_DEBUG_MSG(2, ("=> fetch input"));
 
+#if defined(MBEDTLS_BIO_BUF)
+    if (ssl->f_buf_recv == NULL && ssl->f_buf_recv_timeout == NULL) {
+        MBEDTLS_SSL_DEBUG_MSG(1, ("Bad usage of mbedtls_ssl_set_bio_buf() "));
+        return MBEDTLS_ERR_SSL_BAD_INPUT_DATA;
+    }
+#else
     if (ssl->f_recv == NULL && ssl->f_recv_timeout == NULL) {
         MBEDTLS_SSL_DEBUG_MSG(1, ("Bad usage of mbedtls_ssl_set_bio() "));
         return MBEDTLS_ERR_SSL_BAD_INPUT_DATA;
     }
+#endif
 
-    if (nb_want > in_buf_len - (size_t) (ssl->in_hdr - ssl->in_buf)) {
+    if (nb_want > in_buf_len - in_hdr_offset) {
         MBEDTLS_SSL_DEBUG_MSG(1, ("requesting more data than fits"));
         return MBEDTLS_ERR_SSL_BAD_INPUT_DATA;
     }
@@ -2229,7 +2237,7 @@ int mbedtls_ssl_fetch_input(mbedtls_ssl_context *ssl, size_t nb_want)
             MBEDTLS_SSL_DEBUG_MSG(2, ("timer has expired"));
             ret = MBEDTLS_ERR_SSL_TIMEOUT;
         } else {
-            len = in_buf_len - (size_t) (ssl->in_hdr - ssl->in_buf);
+            len = in_buf_len - in_hdr_offset;
 
             if (mbedtls_ssl_is_handshake_over(ssl) == 0) {
                 timeout = ssl->handshake->retransmit_timeout;
@@ -2239,12 +2247,25 @@ int mbedtls_ssl_fetch_input(mbedtls_ssl_context *ssl, size_t nb_want)
 
             MBEDTLS_SSL_DEBUG_MSG(3, ("f_recv_timeout: %lu ms", (unsigned long) timeout));
 
+#if defined(MBEDTLS_BIO_BUF)
+            if (ssl->f_recv_timeout != NULL) {
+                ret = ssl->f_buf_recv_timeout(ssl->p_bio, ssl->in_hdr, len,
+                                              timeout, &ssl->in_buf);
+            } else {
+                ret = ssl->f_buf_recv(ssl->p_bio, ssl->in_hdr, len,
+                                      &ssl->in_buf);
+            }
+            if (ret > 0) {
+                ssl->in_hdr = ssl->in_buf + in_hdr_offset;
+            }
+#else
             if (ssl->f_recv_timeout != NULL) {
                 ret = ssl->f_recv_timeout(ssl->p_bio, ssl->in_hdr, len,
                                           timeout);
             } else {
                 ret = ssl->f_recv(ssl->p_bio, ssl->in_hdr, len);
             }
+#endif /* MBEDTLS_BIO_BUF */
 
             MBEDTLS_SSL_DEBUG_RET(2, "ssl->f_recv(_timeout)", ret);
 
@@ -2302,6 +2323,21 @@ int mbedtls_ssl_fetch_input(mbedtls_ssl_context *ssl, size_t nb_want)
             if (mbedtls_ssl_check_timer(ssl) != 0) {
                 ret = MBEDTLS_ERR_SSL_TIMEOUT;
             } else {
+#if defined(MBEDTLS_BIO_BUF)
+                if (ssl->f_buf_recv_timeout != NULL) {
+                    ret = ssl->f_buf_recv_timeout(ssl->p_bio,
+                                                  ssl->in_hdr + ssl->in_left,
+                                                  len, ssl->conf->read_timeout,
+                                                  &ssl->in_buf);
+                } else {
+                    ret = ssl->f_buf_recv(ssl->p_bio,
+                                          ssl->in_hdr + ssl->in_left, len,
+                                          &ssl->in_buf);
+                }
+                if (ret > 0) {
+                    ssl->in_hdr = ssl->in_buf + in_hdr_offset;
+                }
+#else
                 if (ssl->f_recv_timeout != NULL) {
                     ret = ssl->f_recv_timeout(ssl->p_bio,
                                               ssl->in_hdr + ssl->in_left, len,
@@ -2310,6 +2346,7 @@ int mbedtls_ssl_fetch_input(mbedtls_ssl_context *ssl, size_t nb_want)
                     ret = ssl->f_recv(ssl->p_bio,
                                       ssl->in_hdr + ssl->in_left, len);
                 }
+#endif /* MBEDTLS_BIO_BUF */
             }
 
             MBEDTLS_SSL_DEBUG_MSG(2, ("in_left: %" MBEDTLS_PRINTF_SIZET
@@ -2352,10 +2389,17 @@ int mbedtls_ssl_flush_output(mbedtls_ssl_context *ssl)
 
     MBEDTLS_SSL_DEBUG_MSG(2, ("=> flush output"));
 
+#if defined(MBEDTLS_BIO_BUF)
+    if (ssl->f_buf_send == NULL) {
+        MBEDTLS_SSL_DEBUG_MSG(1, ("Bad usage of mbedtls_ssl_set_bio_buf() "));
+        return MBEDTLS_ERR_SSL_BAD_INPUT_DATA;
+    }
+#else
     if (ssl->f_send == NULL) {
         MBEDTLS_SSL_DEBUG_MSG(1, ("Bad usage of mbedtls_ssl_set_bio() "));
         return MBEDTLS_ERR_SSL_BAD_INPUT_DATA;
     }
+#endif /* MBEDTLS_BIO_BUF */
 
     /* Avoid incrementing counter if data is flushed */
     if (ssl->out_left == 0) {
@@ -2369,7 +2413,19 @@ int mbedtls_ssl_flush_output(mbedtls_ssl_context *ssl)
                                   mbedtls_ssl_out_hdr_len(ssl) + ssl->out_msglen, ssl->out_left));
 
         buf = ssl->out_hdr - ssl->out_left;
+#if defined(MBEDTLS_BIO_BUF)
+        {
+            size_t out_hdr_offset = (size_t)(ssl->out_hdr - ssl->out_buf);
+
+            ret = ssl->f_buf_send(ssl->p_bio, buf, ssl->out_left,
+                                  &ssl->out_buf);
+            if (ret > 0) {
+                ssl->out_hdr = ssl->out_buf + out_hdr_offset;
+            }
+        }
+#else
         ret = ssl->f_send(ssl->p_bio, buf, ssl->out_left);
+#endif /* MBEDTLS_BIO_BUF */
 
         MBEDTLS_SSL_DEBUG_RET(2, "ssl->f_send", ret);
 
@@ -3654,7 +3710,12 @@ static int ssl_handle_possible_reconnect(mbedtls_ssl_context *ssl)
         /* Don't check write errors as we can't do anything here.
          * If the error is permanent we'll catch it later,
          * if it's not, then hopefully it'll work next time. */
+#if defined(MBEDTLS_BIO_BUF)
+        send_ret = ssl->f_buf_send(ssl->p_bio, ssl->out_buf, len,
+                                   &ssl->out_buf);
+#else
         send_ret = ssl->f_send(ssl->p_bio, ssl->out_buf, len);
+#endif /* MBEDTLS_BIO_BUF */
         MBEDTLS_SSL_DEBUG_RET(2, "ssl->f_send", send_ret);
         (void) send_ret;
 

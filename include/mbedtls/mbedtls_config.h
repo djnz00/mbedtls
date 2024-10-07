@@ -543,6 +543,24 @@
 //#define MBEDTLS_ENTROPY_HARDWARE_ALT
 
 /**
+ * \def MBEDTLS_BIO_BUF
+ *
+ * Uncomment this macro to let Mbed TLS use your own implementation of a
+ * recycling buffer allocator via additional callbacks configured
+ * via \c mbedtls_ssl_set_bio_buf()
+ *
+ * This permits zero-copy of data between mbedtls and downstream bio layers.
+ *
+ * The send and receive functions are extended with an additional
+ * \c unsigned \c char \c **recycle parameter that permits the
+ * callback to take ownership of the buffer containing the data and
+ * replace that with a new buffer for mbedtls to use in its place.
+ *
+ * Uncomment to use your own recycling buffer allocator.
+ */
+//#define MBEDTLS_BIO_BUF
+
+/**
  * \def MBEDTLS_AES_ROM_TABLES
  *
  * Use precomputed AES tables stored in ROM.
