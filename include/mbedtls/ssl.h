@@ -2106,7 +2106,12 @@ void mbedtls_ssl_init(mbedtls_ssl_context *ssl);
  *
  * \note           If #MBEDTLS_USE_PSA_CRYPTO is enabled, the PSA crypto
  *                 subsystem must have been initialized by calling
- *                 psa_crypto_init() before calling this function.
+ *                 \c psa_crypto_init() before calling this function.
+ *
+ * \note           If #MBEDTLS_BIO_BUF is enabled,
+ *                 the buffer allocation and free callbacks must have been
+ *                 initialized by calling \c mbedtls_ssl_set_bio_buf() before
+ *                 calling this function.
  *
  * \param ssl      SSL context
  * \param conf     SSL configuration to use
@@ -2358,8 +2363,10 @@ void mbedtls_ssl_set_bio(mbedtls_ssl_context *ssl,
 
 #if defined(MBEDTLS_BIO_BUF)
 /**
- * \brief          Set the underlying BIO buffer callbacks for write, read and
- *                 read-with-timeout.
+ * \brief          Set the underlying BIO buffer callbacks for write, read,
+ *                 read-with-timeout, receive buffer allocate,
+ *                 send buffer allocate and buffer free.
+ *                 This function MUST be called BEFORE mbedtls_ssl_setup()
  *
  * \param ssl                SSL context
  * \param p_buf_bio          parameter (context) shared by BIO buffer callbacks

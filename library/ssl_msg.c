@@ -2249,10 +2249,10 @@ int mbedtls_ssl_fetch_input(mbedtls_ssl_context *ssl, size_t nb_want)
 
 #if defined(MBEDTLS_BIO_BUF)
             if (ssl->f_recv_timeout != NULL) {
-                ret = ssl->f_buf_recv_timeout(ssl->p_bio, ssl->in_hdr, len,
+                ret = ssl->f_buf_recv_timeout(ssl->p_buf_bio, ssl->in_hdr, len,
                                               timeout, &ssl->in_buf);
             } else {
-                ret = ssl->f_buf_recv(ssl->p_bio, ssl->in_hdr, len,
+                ret = ssl->f_buf_recv(ssl->p_buf_bio, ssl->in_hdr, len,
                                       &ssl->in_buf);
             }
             if (ret > 0) {
@@ -2325,12 +2325,12 @@ int mbedtls_ssl_fetch_input(mbedtls_ssl_context *ssl, size_t nb_want)
             } else {
 #if defined(MBEDTLS_BIO_BUF)
                 if (ssl->f_buf_recv_timeout != NULL) {
-                    ret = ssl->f_buf_recv_timeout(ssl->p_bio,
+                    ret = ssl->f_buf_recv_timeout(ssl->p_buf_bio,
                                                   ssl->in_hdr + ssl->in_left,
                                                   len, ssl->conf->read_timeout,
                                                   &ssl->in_buf);
                 } else {
-                    ret = ssl->f_buf_recv(ssl->p_bio,
+                    ret = ssl->f_buf_recv(ssl->p_buf_bio,
                                           ssl->in_hdr + ssl->in_left, len,
                                           &ssl->in_buf);
                 }
@@ -2417,7 +2417,7 @@ int mbedtls_ssl_flush_output(mbedtls_ssl_context *ssl)
         {
             size_t out_hdr_offset = (size_t)(ssl->out_hdr - ssl->out_buf);
 
-            ret = ssl->f_buf_send(ssl->p_bio, buf, ssl->out_left,
+            ret = ssl->f_buf_send(ssl->p_buf_bio, buf, ssl->out_left,
                                   &ssl->out_buf);
             if (ret > 0) {
                 ssl->out_hdr = ssl->out_buf + out_hdr_offset;
@@ -3711,7 +3711,7 @@ static int ssl_handle_possible_reconnect(mbedtls_ssl_context *ssl)
          * If the error is permanent we'll catch it later,
          * if it's not, then hopefully it'll work next time. */
 #if defined(MBEDTLS_BIO_BUF)
-        send_ret = ssl->f_buf_send(ssl->p_bio, ssl->out_buf, len,
+        send_ret = ssl->f_buf_send(ssl->p_buf_bio, ssl->out_buf, len,
                                    &ssl->out_buf);
 #else
         send_ret = ssl->f_send(ssl->p_bio, ssl->out_buf, len);
